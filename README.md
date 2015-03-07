@@ -1,7 +1,8 @@
 python-isilon-scripts
 =================
 
-A Collection of scripts for use with Isilon
+A Collection of scripts for use with Isilon.  These are unofficial and not supported
+by EMC.  Use at your own risk.
 
 
 ####Tested with:
@@ -43,3 +44,22 @@ Example: ./cp.py -c -i kcisilon -u root -p a /ifs/data/test /ifs/data/clones/tes
    -c              Use sparse cloning technology  
    -v              Verify ACLS only, do not copy or clone  
 ```
+
+quotareport.py Features
+=========================
+gets a list of users from command line, files, homedir, and current user and connects to
+an Isilon cluster and lists all quota and current usage.
+
+usage: quotareport.py [-h] [--file FILES] [--user USERS]
+                      [--threshold THRESHOLD] [--quiet]
+
+Report on user quotas
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --file FILES          file with list of users
+  --user USERS          comma delimited list of users
+  --threshold THRESHOLD
+                        Threshold 0<t<100
+  --quiet               quiet
+
