@@ -57,12 +57,21 @@ def main():
     return_code=1
     for u in users:
         for q in api.platform.quota(persona="USER:" + u,type='user'):
-            pcnt = 100.0 * q['usage']['logical'] / q['thresholds']['hard'] 
+            #see if limit uses logical or physical
+            pcnt = 0.0
+            used = 0
+            if q['thresholds_include_overhead'] :
+                used = q['usage']['physical']
+            else:
+                used = q['usage']['logical']
+            
+            pcnt = 100.0 * used / q['thresholds']['hard'] 
+            
             if pcnt > args.threshold:                
                 return_code=0
                 
                 if not args.quiet:
-                    print('{0:8} {1:7} {2:8}  %{3:3} {4}'.format(u,q['usage']['logical']/(1024**2), q['thresholds']['hard']/(1024**2), pcnt, q['path']))
+                    print('{0:8} {1:7} {2:8}  %{3:3} {4}'.format(u,used/(1024**2), q['thresholds']['hard']/(1024**2), pcnt, q['path']))
     
     exit(return_code)
     
