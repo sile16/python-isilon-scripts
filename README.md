@@ -15,7 +15,7 @@ by EMC.  Use at your own risk.
 cp.py Features
 ==============
 - Copies a source directory to a target directory
-- Can utilize file cloning (uses SSH connections)
+- Can utilize file cloning 
 - Uses snaps to create a temporary static source
 - Multithreaded
 - Intelligently connects to multiple nodes in the cluster

@@ -13,21 +13,23 @@ import collections
 pp = pprint.PrettyPrinter(indent=4)
             
 #httplib.HTTPConnection.debuglevel = 1
-logging.basicConfig()  
-logging.getLogger().setLevel(logging.INFO)
+logging.basicConfig()
+logging.getLogger().setLevel(logging.ERROR)
+      
 
 #Temporary snap name: should be unique
 temp_snap = "tmp_snap_Rc9uHOSob50f"
  
 class ThreadWorker(threading.Thread):
     """Threaded Folder Discovery and Copy"""
-    def __init__(self, url, username, password, queue, clone, sleep, verify,stats):
+    def __init__(self, url, username, password, queue, clone, snapshot, sleep, verify, stats):
         threading.Thread.__init__(self)
         self.url = url
         self.username = username
         self.password = password
         self.queue = queue
         self.clone = clone
+        self.snapshot = snapshot
         self.sleep = sleep
         self.verify = verify
         self.stats = stats
@@ -45,13 +47,8 @@ class ThreadWorker(threading.Thread):
     def run(self):
         #Spawn thread API connections over a period of seconds to get a different IP from SmartConnect
         time.sleep(self.sleep)
-        self.api = isilon.API(self.url, self.username, self.password)
+        self.api = isilon.API(self.url, self.username, self.password, secure=False)
         
-        #The API lib will automatically make SSH connections as needed
-        #However, connect SSH explicitly to spread out SSH connections over time
-        #to avoid connection problems of trying to connect too many too quickly
-        if self.clone:
-            self.api.session.connect_SSH()
                 
         while True :
             #grabs new work item from queue
@@ -65,8 +62,11 @@ class ThreadWorker(threading.Thread):
             
                 #Compare ACLS for both objects and containers
                 acl_src = self.api.namespace.acl(workitem['src'])
-                try:
-                    acl_dst = self.api.namespace.acl(workitem['dst'])
+                acl_dst = self.api.namespace.acl(workitem['dst'])
+                if acl_dst is None:
+                    self.stats['missing'] += 1
+                    logging.error("Destination file not found")                
+                else:
                     #The ACL is a list, so we have to sort them first before compare
                     acl_src['acl'] = sorted(acl_src['acl'])
                     acl_dst['acl'] = sorted(acl_dst['acl'])
@@ -79,18 +79,17 @@ class ThreadWorker(threading.Thread):
                     else:
                         self.stats['match'] += 1
                         
-                except isilon.ObjectNotFound:
-                    self.stats['missing'] += 1
-                    logging.error("Destination file not found")
             else:
                     
                 if workitem['type'] == "container":
                     #This is a directory, so create a new directory then scan it for more files/directories
+                    logging.info("creating directory: %s" % workitem['src'])
                     self.api.namespace.dir_create(workitem['dst'])
                     self.walk(workitem)       
                     self.stats['folders'] +=1
                 else:
-                    self.api.namespace.file_copy(workitem['src'],workitem['dst'],clone=self.clone)
+                    self.api.namespace.file_copy(workitem['src'],workitem['dst'],clone=self.clone, snapshot=self.snapshot)
+                    logging.info("file copied, clone=%s  : %s" % (str(self.clone), workitem['dst']))
                     self.stats['files'] +=1
             
                 #Apply ACLS for both objects and containers
@@ -113,8 +112,14 @@ def main():
     parser.add_argument('-t', required=False, dest='threadcount', type=int, help='Thread Count, default=16', default=16)
     parser.add_argument('-c', action='store_true', dest='clone', help='Use sparse cloning technology')
     parser.add_argument('-v', action='store_true', dest='verify', help='Verify ACLS only, do not copy or clone')
+    parser.add_argument('-vv', action='store_true', default=False, dest='verbose', help='verbose logging')
 
     args = parser.parse_args()
+    
+    if args.verbose:
+        logging.getLogger().setLevel(logging.INFO)
+    
+    
     #Strip trailing slashes on paths
     args.dst = args.dst.rstrip('/')
     args.src = args.src.rstrip('/')
@@ -140,40 +145,35 @@ def main():
     
     
     #check if destination directory already exists
-    try:
-        api.namespace.is_dir(args.dst)
-    except isilon.ObjectNotFound:
+    if api.namespace.is_dir(args.dst):
+        if not args.verify:
+            logging.error("Destination path already exists")
+            exit()
+    else:
         #This is good we want the this to be not found unless we are verifying
         if args.verify:
             logging.error("Cannot find destination path")
             exit()
-    else:
-        if not args.verify:
-            logging.error("Destination path already exists")
-            exit()
+       
     
     #check that source path exists and is a directory
-    try:
-        if not api.namespace.is_dir(args.src):
+    if not api.namespace.is_dir(args.src):
             logging.error("Source path is not a directory")
             exit()
-    except isilon.ObjectNotFound:
-        logging.error("Source path is not found")
-        exit()
     
-    #Check for old bad snaps and delete
-    try:
-        api.platform.snapshot(temp_snap)
+    #Check for old bad snaps and delete    
+    if api.platform.snapshot(temp_snap):
         api.platform.snapshot_delete(temp_snap)
-    except isilon.ObjectNotFound:
-        pass
         
     #Create new snap
     api.platform.snapshot_create(temp_snap, args.src)
     
     #Put the first folder into the queue
     queue = Queue.Queue()
-    queue.put( {"src": args.src + "/.snapshot/" + temp_snap , "dst": args.dst , "type":"container"} )
+    if args.clone:
+        queue.put( {"src": args.src , "dst": args.dst , "type":"container"} )
+    else:
+        queue.put( {"src": args.src + "/.snapshot/" + temp_snap , "dst": args.dst , "type":"container"} )
     
     #find out the cluster node count
     config = api.platform.config()
@@ -184,17 +184,13 @@ def main():
     #If node count is more than thread count we don't want to wait more than 1 second per thread spawn
     spawn_time = min(node_count,args.threadcount)
     
-    #Also, max of 5 SSH session per second to avoid connection problems
-    if args.clone:
-        spawn_time = max( args.threadcount / 5 , spawn_time)
-    
     #spawn a pool of worker threads
     stats=[]
     for i in range(args.threadcount):
         #Calculate sleep amount so we can spawn maximum threads in shortest amount of time while still going across all nodes
         sleep = spawn_time * (i / float(args.threadcount))
         stats.append(collections.defaultdict(int))
-        t = ThreadWorker( args.url, args.username, args.password , queue, args.clone , sleep, args.verify,stats[i])
+        t = ThreadWorker( args.url, args.username, args.password , queue, args.clone , temp_snap , sleep, args.verify,stats[i])
         t.setDaemon(True)
         t.start()
        
