@@ -51,6 +51,8 @@ def main():
     #Initialize an api instance for platform api commands
     api = isilon.API(fqdn,username,password,secure=False)
     api.session.connect()
+    
+    #Print headers
     if not args.quiet:
         print("Username Used(MB) Limit(MB) Capacity      Share")
     
@@ -74,12 +76,6 @@ def main():
                     print('{0:8} {1:7} {2:8}  %{3:3} {4}'.format(u,used/(1024**2), q['thresholds']['hard']/(1024**2), pcnt, q['path']))
     
     exit(return_code)
-    
-
-            
-            
-    
-
 
 
 if __name__ == "__main__":
